@@ -49,7 +49,32 @@ PM Agent (Sonnet / Opus)
 
 ### Pattern Library
 
-The skill accumulates reusable patterns over time:
+The skill supports two pattern modes:
+
+#### EvoMap Mode (Cloud-Shared, Recommended for Teams)
+
+Cloud-shared pattern library via Git repo — **one person solves, everyone reuses**.
+
+```
+User Question
+  → git pull (sync latest patterns)
+  → Search index.json by keywords/tags/scene
+    → Hit: Reuse solution directly (minimal tokens)
+    → Miss: Full Phase 1 → Phase 2 → Auto-generate pattern → git push
+```
+
+| Directory | Scope |
+|-----------|-------|
+| `01-env/` | Environment: PowerShell, CMD, Node, Python, proxy, SSL |
+| `02-uniapp-cross/` | UniApp: RTL, Arabic, payments, packaging, push |
+| `03-data-collection/` | Scraping, cron, time-series DB, Excel, rate-limiting |
+| `04-general-dev/` | Frontend, DB, API, CORS, service integration |
+
+EvoMap patterns use a lightweight, fixed format optimized for AI retrieval and minimal token consumption.
+
+#### Local Mode (Project-Level)
+
+Traditional per-project pattern library:
 
 | Scenario | Action |
 |----------|--------|
@@ -60,7 +85,7 @@ The skill accumulates reusable patterns over time:
 
 Pattern files contain: trigger keywords, key files, implementation checklist, common variants, gotchas, and reference implementations.
 
-## 5 Ways It Saves Tokens
+## 6 Ways It Saves Tokens
 
 | # | Method | How |
 |---|--------|-----|
@@ -69,6 +94,7 @@ Pattern files contain: trigger keywords, key files, implementation checklist, co
 | 3 | Pattern reuse | Matched patterns skip entire Phase 1 exploration |
 | 4 | Context passing | Phase 2 carries Phase 1 results, Coding doesn't re-read files |
 | 5 | Standard accumulation | User corrections auto-saved as coding standards, same mistakes never repeat |
+| 6 | **EvoMap team reuse** | Cloud-shared patterns mean the whole team benefits from each solved problem — no duplicate debugging across members |
 
 ## Quality Assurance
 
@@ -82,11 +108,13 @@ Pattern files contain: trigger keywords, key files, implementation checklist, co
 When you activate `/pm-agent` in a project for the first time, the skill will:
 
 1. Ask you to select models for PM and Coding roles
-2. Scan the project and generate `.claude/project-structure.md`
-3. Append architecture config to `CLAUDE.md`
-4. Create `.claude/patterns/` directory (grows with usage)
+2. **Ask whether to enable EvoMap** cloud-shared pattern library (recommended for teams)
+3. Scan the project and generate `.claude/project-structure.md`
+4. Append architecture config to `CLAUDE.md`
+5. Create `.claude/patterns/` directory (grows with usage)
+6. If EvoMap enabled: clone the cloud pattern repo to `~/.claude/evomap-cache/`
 
-These files are **project-level** and live in the project's `.claude/` directory.
+Project-specific files live in `.claude/`. EvoMap cache is user-level at `~/.claude/evomap-cache/`.
 
 ## Project Files
 
@@ -97,6 +125,7 @@ These files are **project-level** and live in the project's `.claude/` directory
 | `.claude/pm-config.json` | Runtime config (model selection, token display toggle) |
 | `.claude/patterns/PATTERNS.md` | Pattern library index |
 | `.claude/patterns/{name}.md` | Individual pattern files |
+| `~/.claude/evomap-cache/pm-agent/` | EvoMap cloud pattern cache (when enabled) |
 
 ## CLI Commands
 

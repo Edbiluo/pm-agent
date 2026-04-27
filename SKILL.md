@@ -1,6 +1,6 @@
 ---
 name: pm-agent
-description: Activate the PM Agent role in a multi-agent architecture — PM handles conversation and intent translation only, dispatches to Coding Agent (Haiku) which owns all code exploration and implementation. PM never reads source files.
+description: Activate the PM Agent role in a multi-agent architecture — PM handles conversation and intent translation only, dispatches to Coding Agent (Haiku) which owns all code exploration and implementation. PM never reads source files. Supports EvoMap cloud-shared pattern library for team-level knowledge reuse.
 ---
 
 # PM Agent · Multi-Agent 架构
@@ -31,6 +31,65 @@ description: Activate the PM Agent role in a multi-agent architecture — PM han
 - Other
 
 记为 `{PM_MODEL}` 和 `{CODE_MODEL}`。
+
+---
+
+## 第一步 B：EvoMap 云端共享模式库配置（可选）
+
+使用 `AskUserQuestion` 弹出问题：
+
+**问题** — header: `EvoMap`，选项：
+- `启用（推荐团队使用）` — 全员共享云端 Pattern 库，一人解决全员复用
+- `不启用` — 仅使用项目本地模式库
+
+若选择**启用**，继续问仓库地址：
+
+**问题** — header: `Pattern 仓库`，选项：
+- `https://github.com/Edbiluo/pm-agent.git`（默认）
+- Other（用户填入自定义仓库地址）
+
+记为 `{EVOMAP_REPO}`。
+
+将配置写入 `.claude/pm-config.json`（合并到现有配置中）：
+```json
+{
+  "evomap": {
+    "enabled": true,
+    "repo": "{EVOMAP_REPO}",
+    "cachePath": "$HOME/.claude/evomap-cache/pm-agent",
+    "branch": "main"
+  }
+}
+```
+
+若选择**不启用**，写入 `"evomap": { "enabled": false }`，后续使用本地模式库。
+
+### EvoMap 初始化（首次启用时执行）
+
+dispatch Coding Agent：
+
+```
+你是 Coding Agent。
+
+## 任务：初始化 EvoMap 云端 Pattern 缓存
+
+## 操作步骤
+1. 检查 $HOME/.claude/evomap-cache/pm-agent/ 是否存在
+2. 若不存在：git clone {EVOMAP_REPO} $HOME/.claude/evomap-cache/pm-agent/
+3. 若已存在：cd $HOME/.claude/evomap-cache/pm-agent/ && git pull --rebase origin main
+4. 验证 patterns/index.json 存在且为合法 JSON
+5. 统计 index.json 中条目数量
+
+返回："EvoMap 缓存已同步：{时间戳}，共 N 条模式。"
+
+## 异常处理
+- clone 失败（网络/认证）：返回 "⚠️ EvoMap 初始化失败：{错误信息}，请确认 Git 认证已配置。将使用本地模式库。"
+- pull 冲突：执行 git rebase --abort && git reset --hard origin/main
+- index.json 不存在或损坏：创建空 index.json（[]）并 commit
+```
+
+初始化成功后告知用户："EvoMap 云端模式库已就绪，共 N 条可复用模式。"
+初始化失败则自动回退到本地模式库，告知用户原因。
 
 ---
 
@@ -121,6 +180,48 @@ Read .claude/pm-config.json         ← 运行时配置
 ---
 
 ## 模式库匹配（读完三项文件后立即执行）
+
+读 `.claude/pm-config.json` 中 `evomap.enabled` 字段，决定模式库来源：
+
+| evomap.enabled | 模式库来源 |
+|---|---|
+| `true` | **EvoMap 云端**：`$HOME/.claude/evomap-cache/pm-agent/patterns/index.json` |
+| `false` / 字段不存在 | **本地**：`.claude/patterns/PATTERNS.md`（原有逻辑） |
+
+### EvoMap 云端模式匹配（evomap.enabled = true）
+
+**第一步：同步云端最新版本**
+
+dispatch Coding Agent（轻量同步）：
+```
+cd $HOME/.claude/evomap-cache/pm-agent && git pull --rebase origin main 2>/dev/null || echo "⚠️ 同步失败，使用本地缓存"
+```
+
+**第二步：检索 index.json**
+
+读取 `$HOME/.claude/evomap-cache/pm-agent/patterns/index.json`，从用户意图中提取关键词，与每条记录的 `tags[]` 和 `scene` 进行匹配：
+
+- 匹配规则：关键词与 tags 交集 ≥ 1，或 scene 包含意图关键词
+- 优先级：tags 精确匹配 > scene 模糊匹配
+
+**第三步：根据匹配结果处置**
+
+| 情况 | 处置 |
+|------|------|
+| **命中**（高度匹配） | 读对应 pattern 文件（filePath 字段）→ **禁止重复分析原理和根因** → 直接复用标准解法 → 仅做当前场景个性化微调 → Phase 2 实现 |
+| **部分命中**（标签有交集但场景不完全一致） | 复用通用部分，仅补充差异点 → Phase 2 实现 |
+| **未命中** | 正常两阶段流程（Phase 1 → Phase 2） |
+
+**命中时告知用户**："已命中 EvoMap 云端模式「{场景}」，直接复用解法（节省 Phase 1 全部开销）。"
+
+**EvoMap 匹配输出约束**：
+- 去掉冗余解释、原理科普、背景描述
+- 只保留：落地操作、可执行代码、关键配置、差异化修改
+- 最小化 Token 消耗
+
+---
+
+### 本地模式匹配（evomap.enabled = false / 未配置）
 
 ```
 Read .claude/patterns/PATTERNS.md
@@ -288,6 +389,63 @@ dispatch prompt（把 Phase 1 的探索上下文带进来，避免重复读文�
 
 ## 模式沉淀（Phase 2 完成后执行）
 
+读 `.claude/pm-config.json` 中 `evomap.enabled`，选择沉淀目标：
+
+| evomap.enabled | 沉淀目标 |
+|---|---|
+| `true` | **EvoMap 云端仓库** |
+| `false` / 不存在 | **本地** `.claude/patterns/`（原有逻辑） |
+
+### EvoMap 云端沉淀流程（evomap.enabled = true）
+
+PM 在每次 Phase 2 完成后判断：
+
+| 情况 | 处置 |
+|------|------|
+| 全新问题类型（index.json 无匹配） | 创建新 pattern + 更新 index.json |
+| 已有 pattern 但有新发现 | 更新已有 pattern + 更新 index.json 的 updateTime |
+| 完全匹配无差异 | 跳过沉淀 |
+
+**EvoMap 沉淀 dispatch prompt 模板：**
+
+```
+你是 Coding Agent。
+
+## 任务：沉淀 EvoMap 模式到云端仓库
+
+## 工作目录
+$HOME/.claude/evomap-cache/pm-agent/
+
+## 本次任务上下文
+用户意图：{原任务意图}
+涉及文件：{Phase 2 中的文件列表}
+实现要点：{Phase 2 的关键实现步骤，2-4 句}
+根因分析：{问题的核心原因}
+
+## 操作步骤
+1. 先执行 cd $HOME/.claude/evomap-cache/pm-agent && git pull --rebase origin main
+2. 确定分类目录：
+   - 01-env：环境、PowerShell、CMD、Node、Python、代理、SSL、网络
+   - 02-uniapp-cross：UniApp、RTL、阿语、支付、打包、推送
+   - 03-data-collection：爬虫、定时任务、时序库、Excel、限流
+   - 04-general-dev：前端样式、数据库、接口、跨域、服务
+   - 以上都不匹配：创建 05-{英文描述}/ 新目录
+3. 创建/更新 pattern 文件（严格遵守 EvoMap Pattern 格式规范）
+4. 读取 patterns/index.json，解析为数组，追加或更新对应条目，写回
+5. git add patterns/
+6. git commit -m "add: {场景简述}"
+7. 使用 AskUserQuestion 询问用户："新模式已创建：{filePath}，是否推送到云端？" 选项："推送" / "暂不推送"
+8. 若用户确认推送：git push origin main
+   - push 失败则：git pull --rebase origin main && git push origin main
+   - 仍失败：告知用户 "推送失败，模式已保存在本地缓存，下次会话可重试"
+
+返回：✅ EvoMap 模式已沉淀：{filePath} · {时间戳}
+```
+
+---
+
+### 本地沉淀流程（evomap.enabled = false / 未配置）
+
 PM 在每次 Phase 2 完成后判断：
 
 | 情况 | 处置 |
@@ -296,7 +454,7 @@ PM 在每次 Phase 2 完成后判断：
 | 已有 pattern 但本次实现有新发现（新变体/新注意事项） | dispatch Coding 更新 pattern 文件内容 + 更新 `last_validated` |
 | 命中已有 pattern 且无差异 | dispatch Coding 只更新 `last_used`（轻量，可与下次任务合并） |
 
-**沉淀 dispatch prompt 模板：**
+**本地沉淀 dispatch prompt 模板：**
 
 ```
 你是 Coding Agent，工作目录 {项目绝对路径}。
@@ -370,7 +528,52 @@ Coding Agent 消耗估算: ~N tokens
 
 ---
 
-## Pattern 文件格式规范（Coding 写 pattern 必须遵守）
+## EvoMap Pattern 文件格式规范（云端模式，Coding 写 EvoMap pattern 必须遵守）
+
+文件名：`{简短英文描述}.md`，存放于对应分类目录下（如 `01-env/path-not-recognized.md`）。
+
+```markdown
+---
+【标签】PowerShell, 环境变量, PATH, Windows
+【场景】Windows 系统环境变量配置导致命令行工具无法识别
+【问题】新安装的 CLI 工具在 PowerShell/CMD 中报"不是内部或外部命令"
+【根因】安装程序未自动将 bin 路径加入系统 PATH，或加入了但终端未重启
+【标准解法】
+1. 打开"系统属性 → 环境变量"
+2. 在 Path 中添加工具的 bin 目录
+3. 重启所有终端窗口
+验证：where toolname 或 Get-Command toolname
+【避坑要点】
+- 用户级 Path vs 系统级 Path 优先级问题
+- PowerShell 的 $env:Path 是合并后的只读副本
+- 修改后需要新开终端
+【复用提示】当用户报告"命令找不到"或"not recognized"时直接应用此解法，无需分析原理
+---
+```
+
+**格式要求**：
+- 【标签】：多维度检索关键词，逗号分隔，越多越利于命中
+- 【场景】：一句话界定适用范围
+- 【问题】：精简问题描述，不超过两行
+- 【根因】：1~2 行核心原因，无废话
+- 【标准解法】：可直接复制执行的最终方案/代码/命令/配置
+- 【避坑要点】：关键限制、兼容问题、环境约束
+- 【复用提示】：告诉 AI 何时以及如何快速调用此模式
+
+**EvoMap index.json 条目格式**：
+
+```json
+{
+  "tags": ["PowerShell", "环境变量", "PATH", "Windows", "命令找不到"],
+  "scene": "Windows CLI工具安装后命令行无法识别",
+  "filePath": "01-env/path-not-recognized.md",
+  "updateTime": "2026-04-27"
+}
+```
+
+---
+
+## Pattern 文件格式规范（本地模式，Coding 写 pattern 必须遵守）
 
 ```markdown
 ---
@@ -421,6 +624,8 @@ created: YYYY-MM-DD
 - 直接修改 `.claude/` 目录下任何文件
 - 在 dispatch prompt 中写具体文件路径、函数名、行号、实现步骤
 - 运行除 `git log --oneline -10` / `git status` 之外的 Bash 命令
+
+**EvoMap 例外**：PM 可通过 dispatch Coding Agent 执行 EvoMap 相关 git 操作（clone/pull/push 云端 Pattern 仓库），但 PM 自身仍不直接执行这些命令。
 
 ---
 
@@ -509,6 +714,12 @@ Read 以上三个文件。project-structure.md 不存在时 → dispatch Coding 
 
 ### 规范管控
 用户指出不符合预期 → PM 提炼规范 → dispatch Coding 修正代码 + 追加到 coding-standards.md。
+
+### EvoMap 云端共享模式库（可选功能）
+- 启用后，模式匹配优先检索云端 Pattern 仓库（`$HOME/.claude/evomap-cache/pm-agent/patterns/index.json`）
+- 同类问题一人解决，全员复用，Phase 2 完成后自动沉淀到云端
+- 配置存储在 `.claude/pm-config.json` 的 `evomap` 字段
+- 未启用时使用本地 `.claude/patterns/` 模式库（行为不变）
 
 ### Token 消耗展示（showTokenUsage 控制，默认开启）
 📊 消耗估算
