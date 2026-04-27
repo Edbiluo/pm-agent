@@ -1,1 +1,8 @@
-[]
+[
+  {
+    "tags": ["Figma", "MCP", "REST API", "Figma Token", "Desktop Bridge", "design-to-code", "设计稿读取", "get_design_context"],
+    "scene": "Claude Code 通过官方 Figma MCP REST API 稳定读取设计稿，无需 Desktop Bridge",
+    "filePath": "02-uniapp-cross/figma-rest-api-access.md",
+    "updateTime": "2026-04-27"
+  }
+]
