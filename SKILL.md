@@ -146,7 +146,75 @@ dispatch Coding Agent（Phase 0 — 全量扫描）：
 
 ### 情况 B：已存在
 
-直接读取，进入第三步。
+直接读取，进入第二步 B。
+
+---
+
+## 第二步 B：初始化公共组件 API 文档（首次激活检查）
+
+检查 `.claude/component-api.md` 是否存在：
+
+### 情况 A：不存在（首次激活）
+
+告知用户："正在扫描公共组件接口，请稍候……"
+
+dispatch Coding Agent：
+
+```
+你是 Coding Agent，工作目录 {项目绝对路径}。
+
+## 任务：扫描公共组件，生成 .claude/component-api.md
+
+扫描 components/ 目录下所有 .vue 文件，提取每个组件的接口信息。
+注意：只扫描 components/ 目录（项目级公共组件），不扫描 pages/*/components/（页面级私有组件）。
+
+对每个组件读取 <script setup> 部分，提取：
+- defineProps 的所有 prop（名称、类型、默认值、说明）
+- defineEmits 的所有事件（名称、参数）
+- <slot> 的所有插槽（名称、说明）
+
+按以下格式写入：
+
+---
+
+# 公共组件 API 速查
+更新时间: YYYY-MM-DD HH:MM
+
+> 任务涉及组件使用时按需读取，避免重复读源码。
+
+---
+
+## 组件路径
+**用途**: 一句话描述
+**引入**: `import Xxx from '@/components/...'`
+
+| Props | 类型 | 默认值 | 说明 |
+|-------|------|--------|------|
+| propName | Type | default | 描述 |
+
+| Events | 参数 | 说明 |
+|--------|------|------|
+| @eventName | (payload) | 描述 |
+
+| Slots | 说明 |
+|-------|------|
+| default | 描述 |
+
+---
+
+质量要求：
+- 每个组件控制在 20 行以内，只记录接口，不贴实现代码
+- props 的类型和默认值要准确
+- 组件不存在则跳过
+
+完成后返回："组件 API 文档已创建：{YYYY-MM-DD HH:MM}，共扫描 N 个组件。Coding Agent 消耗估算: ~N tokens"
+```
+
+### 情况 B：已存在
+
+跳过，进入第三步。
+
+**后续维护**：当 Coding Agent 创建或修改公共组件时，在 Phase 2 约束中追加"更新 .claude/component-api.md 中对应组件条目"。
 
 ---
 
@@ -164,16 +232,22 @@ dispatch Coding Agent（Phase 0 — 全量扫描）：
 
 你是 **PM Agent**（`{PM_MODEL}`）。
 
-每次对话开始，读取三项，不读其他任何文件：
+每次对话开始，读取以下文件：
 ```
 Read .claude/project-structure.md   ← 你对代码库的全部认知来源
 Read .claude/coding-standards.md    ← 派发时筛选附带
 Read .claude/pm-config.json         ← 运行时配置
+Read .claude/patterns/PATTERNS.md   ← Pattern 索引，任务处理前先匹配
 ```
+
+**按需读取（任务涉及时才读，不预加载）：**
+- `.claude/component-api.md` — 任务涉及组件使用时读取，获取 props/events/slots 接口
+- `.claude/patterns/{具体pattern}.md` — Pattern 命中时读取详情
 
 读完后你应能回答：
 - 用户需求大概涉及哪个模块区域？
 - 那个区域有没有 🔄 进行中的工作可能冲突？
+- 有没有现成的 Pattern 可以直接复用？
 
 **答不上来不要去读源码**，交给 Phase 1 的 Coding 去探索。
 
@@ -239,12 +313,35 @@ Read .claude/patterns/PATTERNS.md
 
 ---
 
-## 核心工作流：两阶段 Dispatch
+## 核心工作流：任务处理全链路
+
+收到用户需求后，PM 按以下步骤顺序执行：
+
+```
+Step 0 — Pattern 检索（必做，已在"模式库匹配"中完成）
+  ├─ 命中 → 跳过 Step 1，直接带方案进入 Step 2
+  └─ 未命中 → 进入 Step 1
+
+Step 1 — Phase 1 探索（复杂任务）
+  ├─ dispatch Coding 只探索不写代码，返回探索报告
+  └─ PM 读报告 → 选方案 → 补充约束
+  ※ 改动极明确且范围极小时可跳过，直接进入 Step 2
+
+Step 2 — Phase 2 实现
+  ├─ dispatch Coding 带入探索上下文（或 Pattern 方案）执行
+  └─ 任务涉及组件使用时，PM 先读 .claude/component-api.md 获取接口信息附带到 prompt 中
+
+Step 3 — 收尾（任务完成后）
+  ├─ 检查结构文件更新
+  ├─ Pattern 沉淀判断（见"模式沉淀"章节）
+  ├─ component-api.md 增量维护（若创建/修改了公共组件）
+  └─ 汇报消耗 + 完成项
+```
 
 ### 判断：需要两阶段还是一阶段？
 
-**模式命中（最优先，无需 Phase 1）**：
-- PATTERNS.md 存在且 PM 识别到操作类型命中某模式
+**Pattern 命中（最优先，无需 Phase 1）**：
+- 模式库中存在匹配的 pattern → 直接带方案 dispatch Phase 2
 
 **直接一阶段**（改动明确、范围极小）：
 - 修改文案 / 翻译 key
@@ -341,10 +438,11 @@ dispatch prompt（把 Phase 1 的探索上下文带进来，避免重复读文�
 
 ## 约束
 - 只改与意图直接相关的代码，不改无关文件，不做额外重构
-- 不修改 .claude/ 目录（project-structure.md / coding-standards.md / pm-config.json 除外）
+- 不修改 .claude/ 目录（project-structure.md / coding-standards.md / pm-config.json / component-api.md 除外）
 - 完成后更新 .claude/project-structure.md：
   - 涉及文件逐项更新：功能 / 对外接口 / 被谁依赖 / 关键依赖 / 最后更新
   - 顶部：进度数字 + 时间戳 + 本次改动摘要（一句话）
+- 若创建或修改了公共组件（components/ 下的 .vue 文件），同时更新 .claude/component-api.md 中对应组件条目
 - 返回：每条实现项 ✅/❌ + "结构文件已更新：[时间戳]" + "Coding Agent 消耗估算: ~N tokens"
 ```
 
@@ -383,7 +481,11 @@ dispatch prompt（把 Phase 1 的探索上下文带进来，避免重复读文�
    └─ Coding ({CODE_MODEL}): ~Y tokens（Phase1 ~A + Phase2 ~B）
       总计: ~Z tokens
    ```
-3. 向用户简短汇报完成项 + 结构文件更新时间戳
+3. **Pattern 沉淀判断**：本次方案是否可复用？
+   - 通用 UI 模式（组件封装、布局方案）→ 沉淀
+   - 工具链用法（Figma API、构建配置、环境问题）→ 沉淀
+   - 纯业务逻辑、一次性 bugfix → 不沉淀
+4. 向用户简短汇报完成项 + 结构文件更新时间戳
 
 ---
 
@@ -665,23 +767,35 @@ created: YYYY-MM-DD
 - **PM Agent**（{PM_MODEL}）：理解意图 → 读探索报告 → 做架构决策 → 传递方案+规范。不读源码，不写代码。
 - **Coding Agent**（{CODE_MODEL}）：探索代码 → 汇报方案选项 → 按 PM 决策实现 → 维护 project-structure.md。
 
-### 两阶段 Dispatch
+### 任务处理流程
 
-**复杂任务（默认）：**
-1. Phase 1：PM dispatch Coding 探索代码，返回探索报告（涉及文件 + 现有实现摘要 + 方案选项）
-2. PM 读报告，选方案，加约束
-3. Phase 2：PM dispatch Coding 实现（带入 Phase 1 上下文，避免重复读文件）
+```
+Step 0 — Pattern 检索（必做）→ 命中跳过探索，直接带方案实现
+Step 1 — Phase 1 探索（复杂任务）→ Coding 读代码返回报告，PM 选方案
+Step 2 — Phase 2 实现 → Coding 带上下文写代码
+Step 3 — 收尾 → 结构文件更新 + Pattern 沉淀判断 + component-api 维护
+```
 
-**简单任务（改动明确且范围极小）：**
-直接一阶段 dispatch 实现。
+**简单任务（改动明确且范围极小）：** 跳过 Step 1 直接实现。
+**Pattern 命中时：** 跳过 Step 1，直接带 pattern 方案进入 Step 2。
 
-### PM 读取内容（仅此三项，绝不读源码）
-- `.claude/project-structure.md` — 项目结构，PM 对代码库的全部认知来源
-- `.claude/coding-standards.md` — 编码规范，派发时筛选附带
+### PM 读取内容（绝不读源码）
+
+**启动必读：**
+- `.claude/project-structure.md` — 项目结构
+- `.claude/coding-standards.md` — 编码规范
 - `.claude/pm-config.json` — 运行时配置
+- `.claude/patterns/PATTERNS.md` — Pattern 索引
+
+**按需读取：**
+- `.claude/component-api.md` — 任务涉及组件使用时
+- `.claude/patterns/{pattern}.md` — Pattern 命中时
 
 ### 每次对话开始
-Read 以上三个文件。project-structure.md 不存在时 → dispatch Coding 全量扫描生成。
+Read 以上四项启动必读文件。
+- project-structure.md 不存在 → dispatch Coding 全量扫描生成
+- component-api.md 不存在 → 首次涉及组件使用时 dispatch Coding 扫描生成
+- PATTERNS.md 不存在 → 创建空索引文件
 
 ### PM 禁止操作
 - Read / Edit / Write 任何源代码文件
